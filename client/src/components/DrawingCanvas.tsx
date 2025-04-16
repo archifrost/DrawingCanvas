@@ -1,8 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { CanvasState, Tool, Point } from '@/types/index';
+import { CanvasState, Tool, Point } from '@/types';
 import { screenToWorld, worldToScreen, drawGrid, drawShape, drawSnapIndicators } from '@/lib/canvasUtils';
 import { pointNearLine, pointNearPolyline, distance, findNearestSnapPoint } from '@/lib/drawingPrimitives';
-import { useKeyboardEvents } from '@/hooks/useKeyboardEvents';
 
 interface DrawingCanvasProps {
   canvasState: CanvasState;
@@ -168,7 +167,7 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
       
       // Seçili şeklin ID'sini dışlayarak en yakın yakalama noktasını bul
       const excludedId = isDraggingEndpoint ? selectedId : undefined;
-      const closestPoint = findNearestSnapPoint(currentMousePosRef.current, shapesRef.current, snapTolerance, excludedId as number | undefined);
+      const closestPoint = findNearestSnapPoint(currentMousePosRef.current, shapesRef.current, snapTolerance, excludedId);
       
       // Bu bir extension snap point ise uzantı çizgisini görselleştir
       if (closestPoint && closestPoint.isExtension && closestPoint.lineStart && closestPoint.lineEnd && ctx) {
@@ -313,41 +312,39 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         const lineEnd = worldToScreen(snapPoint.lineEnd.x, snapPoint.lineEnd.y, canvasState);
         
         // Extension çizgisini çiz (kesik çizgilerle)
-        if (tempCtx) {
-          tempCtx.beginPath();
+        ctx.current.beginPath();
+        
+        // Çizginin her iki yönde de uzantısını göster
+        // Çizgi vektörünü oluştur
+        const dx = lineEnd.x - lineStart.x;
+        const dy = lineEnd.y - lineStart.y;
+        
+        // Çizgiyi her iki yönde de uzat
+        const extensionLength = Math.max(ctx.current.canvas.width, ctx.current.canvas.height); // Tüm canvas boyunca uzat
+        
+        // Normalize et
+        const length = Math.sqrt(dx * dx + dy * dy);
+        if (length > 0) { // 0'a bölmeyi önle
+          const normalizedDx = dx / length;
+          const normalizedDy = dy / length;
           
-          // Çizginin her iki yönde de uzantısını göster
-          // Çizgi vektörünü oluştur
-          const dx = lineEnd.x - lineStart.x;
-          const dy = lineEnd.y - lineStart.y;
+          // Başlangıç noktasından geriye doğru uzat
+          const startExtensionX = lineStart.x - normalizedDx * extensionLength;
+          const startExtensionY = lineStart.y - normalizedDy * extensionLength;
           
-          // Çizgiyi her iki yönde de uzat
-          const extensionLength = Math.max(canvasRef.current.width, canvasRef.current.height); // Tüm canvas boyunca uzat
+          // Bitiş noktasından ileriye doğru uzat
+          const endExtensionX = lineEnd.x + normalizedDx * extensionLength;
+          const endExtensionY = lineEnd.y + normalizedDy * extensionLength;
           
-          // Normalize et
-          const length = Math.sqrt(dx * dx + dy * dy);
-          if (length > 0) { // 0'a bölmeyi önle
-            const normalizedDx = dx / length;
-            const normalizedDy = dy / length;
-            
-            // Başlangıç noktasından geriye doğru uzat
-            const startExtensionX = lineStart.x - normalizedDx * extensionLength;
-            const startExtensionY = lineStart.y - normalizedDy * extensionLength;
-            
-            // Bitiş noktasından ileriye doğru uzat
-            const endExtensionX = lineEnd.x + normalizedDx * extensionLength;
-            const endExtensionY = lineEnd.y + normalizedDy * extensionLength;
-            
-            // Extension çizgisini çiz (kesik çizgilerle ve şeffaf)
-            tempCtx.beginPath();
-            tempCtx.moveTo(startExtensionX, startExtensionY);
-            tempCtx.lineTo(endExtensionX, endExtensionY);
-            tempCtx.strokeStyle = 'rgba(0, 200, 83, 0.3)'; // Açık yeşil ve şeffaf
-            tempCtx.lineWidth = 1;
-            tempCtx.setLineDash([5, 5]); // Kesik çizgi
-            tempCtx.stroke();
-            tempCtx.setLineDash([]); // Dash ayarını sıfırla
-          }
+          // Extension çizgisini çiz (kesik çizgilerle ve şeffaf)
+          ctx.current.beginPath();
+          ctx.current.moveTo(startExtensionX, startExtensionY);
+          ctx.current.lineTo(endExtensionX, endExtensionY);
+          ctx.current.strokeStyle = 'rgba(0, 200, 83, 0.3)'; // Açık yeşil ve şeffaf
+          ctx.current.lineWidth = 1;
+          ctx.current.setLineDash([5, 5]); // Kesik çizgi
+          ctx.current.stroke();
+          ctx.current.setLineDash([]); // Dash ayarını sıfırla
         }
       }
       
@@ -399,7 +396,7 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         // Snap özelliği kapalıysa null, açıksa en yakın snap noktasını kullan
         // Seçili olan şeklin kendi snap noktalarını hariç tut (kendisine yapışmasın)
         const snapPoint = snapEnabled
-          ? findNearestSnapPoint(worldPos, shapesRef.current, snapTolerance, selectedShapeId as number | undefined)
+          ? findNearestSnapPoint(worldPos, shapesRef.current, snapTolerance, selectedShapeId)
           : null;
           
         // Eğer yakalama noktası varsa onu kullan, yoksa normal fare pozisyonunu kullan
@@ -1189,28 +1186,66 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     
   }, [selectedShapeId, onSelectObject]);
   
-  // Keyboard olaylarını modüler hale getirdik - useKeyboardEvents hook'unu kullanıyoruz
-  // useKeyboardEvents hooks/useKeyboardEvents.ts içerisinde tanımlanmıştır
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    // CTRL+Z geri al (Mac için Command+Z)
+    if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+      e.preventDefault(); // Tarayıcının varsayılan geri alma davranışını engelle
+      handleUndo();
+      return;
+    }
+    
+    // Escape tuşu - işlemi iptal et
+    if (e.key === 'Escape') {
+      // Seçili şekli temizle
+      setSelectedShapeId(null);
+      
+      // Üst bileşene bildir
+      if (onSelectObject) {
+        onSelectObject(null);
+      }
+      
+      // Çizim durumunu sıfırla
+      const isDrawing = drawingLine || drawingPolyline || isDraggingEndpoint;
+      
+      // Çizgi çizme işlemini iptal et
+      if (drawingLine) {
+        lineFirstPointRef.current = null;
+        currentShapeRef.current = null;
+        setDrawingLine(false);
+      }
+      
+      // Polyline çizim işlemini iptal et
+      if (drawingPolyline) {
+        polylinePointsRef.current = [];
+        currentShapeRef.current = null;
+        setDrawingPolyline(false);
+      }
+      
+      // Çizgi uç noktası sürükleme işlemini iptal et
+      if (isDraggingEndpoint) {
+        draggingLineEndpointRef.current = null;
+        originalLineRef.current = null;
+        setIsDraggingEndpoint(false);
+      }
+      
+      // Eğer seçim aracında değilsek seçim aracına geç
+      // Çizim yaparken ya da aracımız 'selection' değilse selection aracına geç
+      if ((isDrawing || activeTool !== 'selection') && onToolChange) {
+        onToolChange('selection');
+      }
+    }
+  }, [activeTool, onSelectObject, onToolChange, drawingLine, drawingPolyline, isDraggingEndpoint, handleUndo]);
   
-  // Klavye olaylarını bir custom hook ile yönetiyoruz
-  const { handleKeyDown } = useKeyboardEvents({
-    handleUndo,
-    selectedShapeId,
-    onSelectObject,
-    activeTool,
-    onToolChange,
-    drawingLine,
-    setDrawingLine,
-    lineFirstPointRef,
-    currentShapeRef,
-    drawingPolyline,
-    setDrawingPolyline,
-    polylinePointsRef,
-    isDraggingEndpoint,
-    setIsDraggingEndpoint,
-    draggingLineEndpointRef,
-    originalLineRef
-  });
+  // Keyboard eventleri için ayrı bir useEffect
+  useEffect(() => {
+    // Event listener ekle
+    window.addEventListener('keydown', handleKeyDown);
+    
+    // Cleanup
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [handleKeyDown]); // Sadece handleKeyDown değiştiğinde bağla
   
   // Özel eventleri dinlemek için ayrı bir useEffect - bu sayede döngüsel bağımlılıkları önlüyoruz
   useEffect(() => {

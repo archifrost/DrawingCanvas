@@ -1,4 +1,4 @@
-import { CanvasState, Point } from '@/types/index';
+import { CanvasState, Point } from '@/types';
 import { findNearestSnapPoint } from './drawingPrimitives';
 
 // Transform screen coordinates to world coordinates
