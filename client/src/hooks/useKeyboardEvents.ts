@@ -1,5 +1,5 @@
 import { useCallback, useEffect } from 'react';
-import { Tool } from '@/types/canvas-types';
+import { Tool } from '@/types/index';
 
 interface UseKeyboardEventsProps {
   handleUndo: () => void;

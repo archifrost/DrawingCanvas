@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { CanvasState, Tool, Point } from '@/types/canvas-types';
+import { CanvasState, Tool, Point } from '@/types/index';
 import { screenToWorld, worldToScreen, drawGrid, drawShape, drawSnapIndicators } from '@/lib/canvasUtils';
 import { pointNearLine, pointNearPolyline, distance, findNearestSnapPoint } from '@/lib/drawingPrimitives';
 import { useKeyboardEvents } from '@/hooks/useKeyboardEvents';
@@ -313,39 +313,41 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         const lineEnd = worldToScreen(snapPoint.lineEnd.x, snapPoint.lineEnd.y, canvasState);
         
         // Extension çizgisini çiz (kesik çizgilerle)
-        ctx.current.beginPath();
-        
-        // Çizginin her iki yönde de uzantısını göster
-        // Çizgi vektörünü oluştur
-        const dx = lineEnd.x - lineStart.x;
-        const dy = lineEnd.y - lineStart.y;
-        
-        // Çizgiyi her iki yönde de uzat
-        const extensionLength = Math.max(ctx.current.canvas.width, ctx.current.canvas.height); // Tüm canvas boyunca uzat
-        
-        // Normalize et
-        const length = Math.sqrt(dx * dx + dy * dy);
-        if (length > 0) { // 0'a bölmeyi önle
-          const normalizedDx = dx / length;
-          const normalizedDy = dy / length;
+        if (tempCtx) {
+          tempCtx.beginPath();
           
-          // Başlangıç noktasından geriye doğru uzat
-          const startExtensionX = lineStart.x - normalizedDx * extensionLength;
-          const startExtensionY = lineStart.y - normalizedDy * extensionLength;
+          // Çizginin her iki yönde de uzantısını göster
+          // Çizgi vektörünü oluştur
+          const dx = lineEnd.x - lineStart.x;
+          const dy = lineEnd.y - lineStart.y;
           
-          // Bitiş noktasından ileriye doğru uzat
-          const endExtensionX = lineEnd.x + normalizedDx * extensionLength;
-          const endExtensionY = lineEnd.y + normalizedDy * extensionLength;
+          // Çizgiyi her iki yönde de uzat
+          const extensionLength = Math.max(canvasRef.current.width, canvasRef.current.height); // Tüm canvas boyunca uzat
           
-          // Extension çizgisini çiz (kesik çizgilerle ve şeffaf)
-          ctx.current.beginPath();
-          ctx.current.moveTo(startExtensionX, startExtensionY);
-          ctx.current.lineTo(endExtensionX, endExtensionY);
-          ctx.current.strokeStyle = 'rgba(0, 200, 83, 0.3)'; // Açık yeşil ve şeffaf
-          ctx.current.lineWidth = 1;
-          ctx.current.setLineDash([5, 5]); // Kesik çizgi
-          ctx.current.stroke();
-          ctx.current.setLineDash([]); // Dash ayarını sıfırla
+          // Normalize et
+          const length = Math.sqrt(dx * dx + dy * dy);
+          if (length > 0) { // 0'a bölmeyi önle
+            const normalizedDx = dx / length;
+            const normalizedDy = dy / length;
+            
+            // Başlangıç noktasından geriye doğru uzat
+            const startExtensionX = lineStart.x - normalizedDx * extensionLength;
+            const startExtensionY = lineStart.y - normalizedDy * extensionLength;
+            
+            // Bitiş noktasından ileriye doğru uzat
+            const endExtensionX = lineEnd.x + normalizedDx * extensionLength;
+            const endExtensionY = lineEnd.y + normalizedDy * extensionLength;
+            
+            // Extension çizgisini çiz (kesik çizgilerle ve şeffaf)
+            tempCtx.beginPath();
+            tempCtx.moveTo(startExtensionX, startExtensionY);
+            tempCtx.lineTo(endExtensionX, endExtensionY);
+            tempCtx.strokeStyle = 'rgba(0, 200, 83, 0.3)'; // Açık yeşil ve şeffaf
+            tempCtx.lineWidth = 1;
+            tempCtx.setLineDash([5, 5]); // Kesik çizgi
+            tempCtx.stroke();
+            tempCtx.setLineDash([]); // Dash ayarını sıfırla
+          }
         }
       }
       
