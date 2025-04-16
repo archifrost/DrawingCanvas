@@ -1193,7 +1193,7 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
   // useKeyboardEvents hooks/useKeyboardEvents.ts içerisinde tanımlanmıştır
   
   // Klavye olaylarını bir custom hook ile yönetiyoruz
-  useKeyboardEvents({
+  const { handleKeyDown } = useKeyboardEvents({
     handleUndo,
     selectedShapeId,
     onSelectObject,
