@@ -1,7 +1,8 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { CanvasState, Tool, Point } from '@/types';
+import { CanvasState, Tool, Point } from '@/types/canvas-types';
 import { screenToWorld, worldToScreen, drawGrid, drawShape, drawSnapIndicators } from '@/lib/canvasUtils';
 import { pointNearLine, pointNearPolyline, distance, findNearestSnapPoint } from '@/lib/drawingPrimitives';
+import { useKeyboardEvents } from '@/hooks/useKeyboardEvents';
 
 interface DrawingCanvasProps {
   canvasState: CanvasState;
@@ -1186,66 +1187,28 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     
   }, [selectedShapeId, onSelectObject]);
   
-  const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    // CTRL+Z geri al (Mac için Command+Z)
-    if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
-      e.preventDefault(); // Tarayıcının varsayılan geri alma davranışını engelle
-      handleUndo();
-      return;
-    }
-    
-    // Escape tuşu - işlemi iptal et
-    if (e.key === 'Escape') {
-      // Seçili şekli temizle
-      setSelectedShapeId(null);
-      
-      // Üst bileşene bildir
-      if (onSelectObject) {
-        onSelectObject(null);
-      }
-      
-      // Çizim durumunu sıfırla
-      const isDrawing = drawingLine || drawingPolyline || isDraggingEndpoint;
-      
-      // Çizgi çizme işlemini iptal et
-      if (drawingLine) {
-        lineFirstPointRef.current = null;
-        currentShapeRef.current = null;
-        setDrawingLine(false);
-      }
-      
-      // Polyline çizim işlemini iptal et
-      if (drawingPolyline) {
-        polylinePointsRef.current = [];
-        currentShapeRef.current = null;
-        setDrawingPolyline(false);
-      }
-      
-      // Çizgi uç noktası sürükleme işlemini iptal et
-      if (isDraggingEndpoint) {
-        draggingLineEndpointRef.current = null;
-        originalLineRef.current = null;
-        setIsDraggingEndpoint(false);
-      }
-      
-      // Eğer seçim aracında değilsek seçim aracına geç
-      // Çizim yaparken ya da aracımız 'selection' değilse selection aracına geç
-      if ((isDrawing || activeTool !== 'selection') && onToolChange) {
-        onToolChange('selection');
-      }
-    }
-  }, [activeTool, onSelectObject, onToolChange, drawingLine, drawingPolyline, isDraggingEndpoint, handleUndo]);
+  // Keyboard olaylarını modüler hale getirdik - useKeyboardEvents hook'unu kullanıyoruz
+  // useKeyboardEvents hooks/useKeyboardEvents.ts içerisinde tanımlanmıştır
   
-  // Keyboard eventleri için ayrı bir useEffect
-  useEffect(() => {
-    // Event listener ekle
-    window.addEventListener('keydown', handleKeyDown);
-    
-    // Cleanup
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [handleKeyDown]); // Sadece handleKeyDown değiştiğinde bağla
+  // Klavye olaylarını bir custom hook ile yönetiyoruz
+  useKeyboardEvents({
+    handleUndo,
+    selectedShapeId,
+    onSelectObject,
+    activeTool,
+    onToolChange,
+    drawingLine,
+    setDrawingLine,
+    lineFirstPointRef,
+    currentShapeRef,
+    drawingPolyline,
+    setDrawingPolyline,
+    polylinePointsRef,
+    isDraggingEndpoint,
+    setIsDraggingEndpoint,
+    draggingLineEndpointRef,
+    originalLineRef
+  });
   
   // Özel eventleri dinlemek için ayrı bir useEffect - bu sayede döngüsel bağımlılıkları önlüyoruz
   useEffect(() => {
