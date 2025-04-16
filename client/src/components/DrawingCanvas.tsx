@@ -168,7 +168,7 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
       
       // Seçili şeklin ID'sini dışlayarak en yakın yakalama noktasını bul
       const excludedId = isDraggingEndpoint ? selectedId : undefined;
-      const closestPoint = findNearestSnapPoint(currentMousePosRef.current, shapesRef.current, snapTolerance, excludedId);
+      const closestPoint = findNearestSnapPoint(currentMousePosRef.current, shapesRef.current, snapTolerance, excludedId as number | undefined);
       
       // Bu bir extension snap point ise uzantı çizgisini görselleştir
       if (closestPoint && closestPoint.isExtension && closestPoint.lineStart && closestPoint.lineEnd && ctx) {
@@ -399,7 +399,7 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         // Snap özelliği kapalıysa null, açıksa en yakın snap noktasını kullan
         // Seçili olan şeklin kendi snap noktalarını hariç tut (kendisine yapışmasın)
         const snapPoint = snapEnabled
-          ? findNearestSnapPoint(worldPos, shapesRef.current, snapTolerance, selectedShapeId)
+          ? findNearestSnapPoint(worldPos, shapesRef.current, snapTolerance, selectedShapeId as number | undefined)
           : null;
           
         // Eğer yakalama noktası varsa onu kullan, yoksa normal fare pozisyonunu kullan
