@@ -1,8 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { CanvasState, Tool, Point } from '@/types';
-import { drawGrid, drawShape, drawSnapIndicators, screenToWorld, worldToScreen } from '@/lib/canvasUtils';
-import { distance, findNearestSnapPoint } from '@/lib/drawingPrimitives';
-import { useCanvasEvents } from '@/hooks/useCanvasEvents'; // Yeni hook'u import ediyoruz
+import { screenToWorld, worldToScreen, drawGrid, drawShape, drawSnapIndicators } from '@/lib/canvasUtils';
+import { pointNearLine, pointNearPolyline, distance, findNearestSnapPoint } from '@/lib/drawingPrimitives';
 
 interface DrawingCanvasProps {
   canvasState: CanvasState;
@@ -267,6 +266,8 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     };
   }, []); // Bileşen takıldığında bir kez çalışsın, renderCanvas değişse bile yeniden çalışmasın
   
+  // =========== OLAY İŞLEYİCİLERİ ===========
+  
   // Mouse event handlers
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!canvasRef.current) return;
@@ -305,49 +306,6 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
       const snapPoint = snapEnabled
         ? findNearestSnapPoint(worldPos, shapesWithTempPolyline, snapTolerance)
         : null;
-        
-      // Extension doğrultularını göstermek için - extension kontrolü
-      if (snapPoint && snapPoint.isExtension && snapPoint.lineStart && snapPoint.lineEnd && canvasRef.current) {
-        const tempCtx = canvasRef.current.getContext('2d');
-        const lineStart = worldToScreen(snapPoint.lineStart.x, snapPoint.lineStart.y, canvasState);
-        const lineEnd = worldToScreen(snapPoint.lineEnd.x, snapPoint.lineEnd.y, canvasState);
-        
-        // Extension çizgisini çiz (kesik çizgilerle)
-        ctx.current.beginPath();
-        
-        // Çizginin her iki yönde de uzantısını göster
-        // Çizgi vektörünü oluştur
-        const dx = lineEnd.x - lineStart.x;
-        const dy = lineEnd.y - lineStart.y;
-        
-        // Çizgiyi her iki yönde de uzat
-        const extensionLength = Math.max(ctx.current.canvas.width, ctx.current.canvas.height); // Tüm canvas boyunca uzat
-        
-        // Normalize et
-        const length = Math.sqrt(dx * dx + dy * dy);
-        if (length > 0) { // 0'a bölmeyi önle
-          const normalizedDx = dx / length;
-          const normalizedDy = dy / length;
-          
-          // Başlangıç noktasından geriye doğru uzat
-          const startExtensionX = lineStart.x - normalizedDx * extensionLength;
-          const startExtensionY = lineStart.y - normalizedDy * extensionLength;
-          
-          // Bitiş noktasından ileriye doğru uzat
-          const endExtensionX = lineEnd.x + normalizedDx * extensionLength;
-          const endExtensionY = lineEnd.y + normalizedDy * extensionLength;
-          
-          // Extension çizgisini çiz (kesik çizgilerle ve şeffaf)
-          ctx.current.beginPath();
-          ctx.current.moveTo(startExtensionX, startExtensionY);
-          ctx.current.lineTo(endExtensionX, endExtensionY);
-          ctx.current.strokeStyle = 'rgba(0, 200, 83, 0.3)'; // Açık yeşil ve şeffaf
-          ctx.current.lineWidth = 1;
-          ctx.current.setLineDash([5, 5]); // Kesik çizgi
-          ctx.current.stroke();
-          ctx.current.setLineDash([]); // Dash ayarını sıfırla
-        }
-      }
       
       // Fare pozisyonu veya snap noktası
       const currentPoint = snapPoint || worldPos;
@@ -357,215 +315,571 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
         // Mevcut noktaları kopyala, değiştirmeyelim
         const currentPoints = [...polylinePointsRef.current];
         
-        // Önizleme noktasını güncelle - bu sadece çizim için
+        // Önizleme çizgisini oluşturmak için son noktaya fareyi ekle
+        const allPoints = [...currentPoints, currentPoint];
+        
+        // Polyline önizlemesini güncelle
         currentShapeRef.current = {
-          id: currentShapeRef.current.id || -1,
-          type: 'polyline',
-          points: currentPoints,  // Orijinal noktaları kullan
-          thickness: 1,
-          closed: false,
-          previewPoint: currentPoint, // Önizleme noktası ekle
-          isSnapping: !!snapPoint
+          ...currentShapeRef.current,
+          points: allPoints
         };
       }
     }
-    
-    // SADECE orta fare tuşu (wheel button) ile pan yapmaya izin ver (buttons=4)
-    if (e.buttons === 4) {
-      const dx = e.clientX - dragStartRef.current.x;
-      const dy = e.clientY - dragStartRef.current.y;
+    // Çizgi çizme modu ve birinci noktası varsa, geçici çizgi çiz
+    else if (activeTool === 'line' && drawingLine && lineFirstPointRef.current) {
+      // Snap kontrolü
+      const snapTolerance = 10 / canvasState.zoom;
+      const snapPoint = snapEnabled ? findNearestSnapPoint(worldPos, shapesRef.current, snapTolerance) : null;
       
-      onPanChange(
-        canvasState.panOffset.x + dx,
-        canvasState.panOffset.y + dy
-      );
+      // Snap noktası veya fare pozisyonu - işlem önceliği snap noktasına
+      let secondPoint = snapPoint || worldPos;
       
-      // Güncelleme sonrası başlangıç noktasını güncelle
-      dragStartRef.current = { x: e.clientX, y: e.clientY };
-    } 
-    
-    // Çizgi veya polyline noktası sürükleme işlemi
-    else if (isDraggingEndpoint && draggingLineEndpointRef.current && selectedShapeId !== null && (e.buttons === 1)) {
-      // Hangi şeklin düzenleneceğini bul
-      const shapeIndex = shapesRef.current.findIndex(shape => shape.id === selectedShapeId);
-      if (shapeIndex !== -1) {
-        // Şekli bul
-        const shape = shapesRef.current[shapeIndex];
+      // Ortho modu açıksa çizgiyi yatay veya dikey zorla
+      if (orthoEnabled && !snapPoint) { // Snap noktası varsa ortho modu geçersiz kıl
+        // İlk nokta ile fare pozisyonu arasındaki delta değerlerini hesapla
+        const firstPoint = lineFirstPointRef.current;
+        const dx = Math.abs(secondPoint.x - firstPoint.x);
+        const dy = Math.abs(secondPoint.y - firstPoint.y);
         
-        // Snap özelliği için kontrol yap
-        const snapTolerance = 10 / canvasState.zoom; // Zoom'a göre ayarlanmış tolerans
-        // Snap özelliği kapalıysa null, açıksa en yakın snap noktasını kullan
-        // Seçili olan şeklin kendi snap noktalarını hariç tut (kendisine yapışmasın)
-        const snapPoint = snapEnabled
-          ? findNearestSnapPoint(worldPos, shapesRef.current, snapTolerance, selectedShapeId)
-          : null;
-          
-        // Eğer yakalama noktası varsa onu kullan, yoksa normal fare pozisyonunu kullan
-        const endPoint = snapPoint || worldPos;
-        
-        if (shape.type === 'line') {
-          // Çizgi uç noktası taşıma
-          // Hangi uç noktasının taşındığına göre güncelle
-          if (draggingLineEndpointRef.current === 'start') {
-            shape.startX = endPoint.x;
-            shape.startY = endPoint.y;
-          } else if (draggingLineEndpointRef.current === 'end') {
-            shape.endX = endPoint.x;
-            shape.endY = endPoint.y;
-          }
-        } 
-        else if (shape.type === 'polyline' && draggingLineEndpointRef.current === 'vertex') {
-          // Polyline noktası taşıma
-          const vertexIndex = originalLineRef.current?.vertexIndex;
-          if (vertexIndex !== undefined && Array.isArray(shape.points) && vertexIndex < shape.points.length) {
-            // Belirli bir vertex'i güncelle
-            shape.points[vertexIndex] = { x: endPoint.x, y: endPoint.y };
-          }
-        }
-        
-        // UI güncellemesi için seçili nesneyi güncelle
-        if (onSelectObject) {
-          onSelectObject(shape);
-        }
-        
-        // Canvas'ın yeniden çizilmesini sağlayan düzenleme
-        shapesRef.current[shapeIndex] = { ...shape };
-        
-        // İmleç stilini güncelle
-        if (canvasRef.current) {
-          canvasRef.current.style.cursor = 'move';
+        // Hangisi daha büyük - yatay veya dikey çizim
+        if (dx > dy) {
+          // Yatay çizgi (y değerini sabit tut)
+          secondPoint = {
+            x: secondPoint.x,
+            y: firstPoint.y
+          };
+        } else {
+          // Dikey çizgi (x değerini sabit tut)
+          secondPoint = {
+            x: firstPoint.x, 
+            y: secondPoint.y
+          };
         }
       }
-    } 
+      
+      // Önizleme çizgisini güncelle
+      if (currentShapeRef.current) {
+        currentShapeRef.current = {
+          ...currentShapeRef.current,
+          startX: lineFirstPointRef.current.x,
+          startY: lineFirstPointRef.current.y,
+          endX: secondPoint.x,
+          endY: secondPoint.y,
+          isSnapping: !!snapPoint,
+          isDashed: true
+        };
+      }
+    }
+  };
+  
+  // MOUSE DOWN - fare tıklama olayı
+  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!canvasRef.current) return;
     
-    // Handle shape drawing (sol fare tuşu çizim)
-    else if (currentShapeRef.current && activeTool !== 'selection') {
-      // Çizgi çizme özel durumu
-      if (activeTool === 'line' && drawingLine) {
-        // Birinci nokta sabit, ikinci nokta fare ile hareket eder
-        if (lineFirstPointRef.current) {
-          // Snap (yakalama) noktası kontrolü - en yakın yakalama noktasını bul
-          const snapTolerance = 10 / canvasState.zoom; // Zoom'a göre ayarlanmış tolerans
-          // Snap özelliği kapalıysa null, açıksa en yakın snap noktasını kullan
-          const snapPoint = snapEnabled
-            ? findNearestSnapPoint(worldPos, shapesRef.current, snapTolerance)
-            : null;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    
+    // Convert screen coordinates to world coordinates
+    const worldPos = screenToWorld(x, y, canvasState);
+    
+    // Right-click - sağ fare tuşu ile iptal et ve bağlam menüsünü önle
+    if (e.button === 2) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    
+    // Middle mouse button - orta fare tuşu (tekerlek) ile pan yap
+    if (e.button === 1) {
+      dragStartRef.current = { x: e.clientX, y: e.clientY };
+      return;
+    }
+    
+    // Left mouse button - sol fare tuşu
+    if (e.button === 0) {
+      // Selection tool
+      if (activeTool === 'selection') {
+        // Find and select a shape at this position
+        const selectedShape = findShapeAtPoint(worldPos);
+        
+        if (selectedShape) {
+          // Set the selected shape
+          setSelectedShapeId(selectedShape.id);
+          if (onSelectObject) onSelectObject(selectedShape);
+        } else {
+          // Clear selection if clicked on empty space
+          setSelectedShapeId(null);
+          if (onSelectObject) onSelectObject(null);
+        }
+      }
+      // Drawing tools
+      else if (activeTool === 'line') {
+        // If first point not set yet, set it and start line drawing
+        if (!drawingLine) {
+          // Snap kontrolü
+          const snapTolerance = 10 / canvasState.zoom;
+          const snapPoint = snapEnabled ? findNearestSnapPoint(worldPos, shapesRef.current, snapTolerance) : null;
           
-          // Eğer yakalama noktası varsa onu kullan, yoksa normal fare pozisyonunu kullan
-          let endPoint = snapPoint || worldPos;
+          // First point is either a snap point or mouse position
+          lineFirstPointRef.current = snapPoint || worldPos;
           
-          // Ortho modu açıksa, çizgiyi yatay veya dikey olarak zorla
-          if (orthoEnabled && !snapPoint) { // Snap noktası varsa, snap'e öncelik ver
-            // İlk nokta ile fare pozisyonu arasındaki delta değerlerini hesapla
-            const dx = Math.abs(endPoint.x - lineFirstPointRef.current.x);
-            const dy = Math.abs(endPoint.y - lineFirstPointRef.current.y);
-            
-            // Hangisi daha büyük - yatay veya dikey çizim
-            if (dx > dy) {
-              // Yatay çizgi (y değerini sabit tut)
-              endPoint = {
-                x: endPoint.x,
-                y: lineFirstPointRef.current.y
-              };
-            } else {
-              // Dikey çizgi (x değerini sabit tut)
-              endPoint = {
-                x: lineFirstPointRef.current.x, 
-                y: endPoint.y
-              };
-            }
-          }
-          
+          // Create temporary line
           currentShapeRef.current = {
-            ...currentShapeRef.current,
+            id: nextIdRef.current,
+            type: 'line',
             startX: lineFirstPointRef.current.x,
             startY: lineFirstPointRef.current.y,
-            endX: endPoint.x,
-            endY: endPoint.y,
-            // Yakalama noktası varsa bunu görsel olarak belirt
-            isSnapping: !!snapPoint,
-            isDashed: true // Kesikli çizgi olarak göster
-          };
-        }
-      } 
-      // Polyline çizme özel durumu
-      else if (activeTool === 'polyline' && drawingPolyline) {
-        if (polylinePointsRef.current.length > 0) {
-          // Geçici polyline oluştur - şu ana kadar eklenen noktaları içerir
-          const tempPolyline = {
-            id: -999, // Geçici ID
-            type: 'polyline',
-            points: [...polylinePointsRef.current],
+            endX: lineFirstPointRef.current.x,
+            endY: lineFirstPointRef.current.y,
             thickness: 1,
-            closed: false
+            isPreview: true
           };
           
-          // Geçici şekli snap kontrolleri için ekle, ama orijinal listeyi değiştirme
-          const shapesWithTempPolyline = [...shapesRef.current, tempPolyline];
+          setDrawingLine(true);
+        } 
+        // Second click - complete the line
+        else {
+          // Snap kontrolü
+          const snapTolerance = 10 / canvasState.zoom;
+          const snapPoint = snapEnabled ? findNearestSnapPoint(worldPos, shapesRef.current, snapTolerance) : null;
           
-          // Snap (yakalama) noktası kontrolü - güncel şekil listesi ile
-          const snapTolerance = 10 / canvasState.zoom; // Zoom'a göre ayarlanmış tolerans
-          // Snap özelliği kapalıysa null, açıksa en yakın snap noktasını kullan
-          const snapPoint = snapEnabled
-            ? findNearestSnapPoint(worldPos, shapesWithTempPolyline, snapTolerance)
-            : null;
+          // Second point is either a snap point or mouse position
+          let secondPoint = snapPoint || worldPos;
           
-          // Eğer yakalama noktası varsa onu kullan, yoksa normal fare pozisyonunu kullan
-          let currentPoint = snapPoint || worldPos;
-          
-          // Ortho modu açıksa, çizgiyi yatay veya dikey olarak zorla
-          if (orthoEnabled && !snapPoint && polylinePointsRef.current.length > 0) {
-            // Son eklenen nokta ile fare pozisyonu arasında ortho modu uygula
-            const lastPoint = polylinePointsRef.current[polylinePointsRef.current.length - 1];
-            
-            // Son nokta ile fare pozisyonu arasındaki delta değerlerini hesapla
-            const dx = Math.abs(currentPoint.x - lastPoint.x);
-            const dy = Math.abs(currentPoint.y - lastPoint.y);
+          // Ortho modu açıksa, çizgiyi yatay veya dikey zorla
+          if (orthoEnabled && !snapPoint && lineFirstPointRef.current) { // Snap noktası varsa, snap'e öncelik ver
+            // İlk nokta ile fare pozisyonu arasındaki delta değerlerini hesapla
+            const firstPoint = lineFirstPointRef.current;
+            const dx = Math.abs(secondPoint.x - firstPoint.x);
+            const dy = Math.abs(secondPoint.y - firstPoint.y);
             
             // Hangisi daha büyük - yatay veya dikey çizim
             if (dx > dy) {
               // Yatay çizgi (y değerini sabit tut)
-              currentPoint = {
-                x: currentPoint.x,
-                y: lastPoint.y
+              secondPoint = {
+                x: secondPoint.x,
+                y: firstPoint.y
               };
             } else {
               // Dikey çizgi (x değerini sabit tut)
-              currentPoint = {
-                x: lastPoint.x,
-                y: currentPoint.y
+              secondPoint = {
+                x: firstPoint.x, 
+                y: secondPoint.y
               };
             }
           }
           
-          // Tüm noktaları koruyarak son noktayı fare pozisyonuyla güncelle (çizim önizlemesi için)
+          // Create the final line
+          const newLine = {
+            id: nextIdRef.current++,
+            type: 'line',
+            startX: lineFirstPointRef.current!.x,
+            startY: lineFirstPointRef.current!.y,
+            endX: secondPoint.x,
+            endY: secondPoint.y,
+            thickness: 1
+          };
+          
+          // İşlem tarihçesine ekle
+          actionsHistoryRef.current.push({
+            action: 'add_shape',
+            data: { shapeId: newLine.id }
+          });
+          
+          // Add line to shapes
+          shapesRef.current.push(newLine);
+          
+          // Reset for next line
+          lineFirstPointRef.current = null;
+          currentShapeRef.current = null;
+          setDrawingLine(false);
+        }
+      }
+      else if (activeTool === 'polyline') {
+        // Snap kontrolü
+        const snapTolerance = 10 / canvasState.zoom;
+        const snapPoint = snapEnabled ? findNearestSnapPoint(worldPos, shapesRef.current, snapTolerance) : null;
+        
+        // Noktayı ekle (snap noktası ya da fare pozisyonu)
+        const point = snapPoint || worldPos;
+        
+        // İlk nokta
+        if (polylinePointsRef.current.length === 0) {
+          polylinePointsRef.current.push(point);
+          setDrawingPolyline(true);
+          
+          // Create temporary polyline
+          currentShapeRef.current = {
+            id: nextIdRef.current,
+            type: 'polyline',
+            points: [point],
+            thickness: 1,
+            closed: false,
+            isPreview: true
+          };
+        } 
+        // Daha sonraki noktalar
+        else {
+          // Ortho modu açıksa, son noktadan bu noktaya çizgiyi yatay veya dikey zorla
+          if (orthoEnabled && !snapPoint && polylinePointsRef.current.length > 0) {
+            const lastPoint = polylinePointsRef.current[polylinePointsRef.current.length - 1];
+            const dx = Math.abs(point.x - lastPoint.x);
+            const dy = Math.abs(point.y - lastPoint.y);
+            
+            // Yatay veya dikey çizme
+            let newPoint;
+            if (dx > dy) {
+              // Yatay
+              newPoint = { x: point.x, y: lastPoint.y };
+            } else {
+              // Dikey
+              newPoint = { x: lastPoint.x, y: point.y };
+            }
+            
+            polylinePointsRef.current.push(newPoint);
+          } else {
+            // Normal nokta ekle
+            polylinePointsRef.current.push(point);
+          }
+          
+          // Geçici polyline'ı güncelle
           if (currentShapeRef.current) {
-            // Mevcut noktaları al
-            const points = [...polylinePointsRef.current];
-            
-            // Şu anki fare pozisyonunu geçici olarak ekle (taslak gösterim için)
-            const tempPoints = [...points, { x: currentPoint.x, y: currentPoint.y }];
-            
-            // Güncel şekli güncelle
             currentShapeRef.current = {
               ...currentShapeRef.current,
-              points: points, // Önizleme noktasını dahil etme, bunu previewPoint ile yapıyoruz
-              previewPoint: currentPoint, // Önizleme noktası olarak kullan
-              // Yakalama noktası varsa bunu görsel olarak belirt
-              isSnapping: !!snapPoint
+              points: [...polylinePointsRef.current]
             };
           }
         }
       }
-      // Diğer şekil çizimleri için sürükle-bırak davranışı (fare basılı tutulduğunda)
-      else if (isDraggingRef.current) {
-        if (activeTool === 'point') {
-          // Nothing to update for point
-        }
-        // Rectangle ve circle araçları kaldırıldı
+      else if (activeTool === 'point') {
+        // Snap kontrolü
+        const snapTolerance = 10 / canvasState.zoom;
+        const snapPoint = snapEnabled ? findNearestSnapPoint(worldPos, shapesRef.current, snapTolerance) : null;
+        
+        // Create point at snap position or mouse position
+        const newPoint = {
+          id: nextIdRef.current++,
+          type: 'point',
+          x: (snapPoint || worldPos).x,
+          y: (snapPoint || worldPos).y,
+          style: 'default'
+        };
+        
+        // İşlem tarihçesine ekle
+        actionsHistoryRef.current.push({
+          action: 'add_shape',
+          data: { shapeId: newPoint.id }
+        });
+        
+        // Add point to shapes
+        shapesRef.current.push(newPoint);
       }
     }
   };
+  
+  // MOUSE UP - fare bırakma olayı
+  const handleMouseUp = () => {
+    // Update dragging state
+    setIsDragging(false);
+    isDraggingRef.current = false;
+    
+    // Çizgi uç noktası sürükleme işlemi bittiğinde, işlem tarihçesine kaydet
+    if (isDraggingEndpoint && selectedShapeId !== null) {
+      const shapeIndex = shapesRef.current.findIndex(shape => shape.id === selectedShapeId);
+      if (shapeIndex !== -1 && originalLineRef.current) {
+        // İşlem tarihçesine orijinal durumu ekle
+        actionsHistoryRef.current.push({
+          action: 'update_shape',
+          data: { originalShape: originalLineRef.current }
+        });
+        
+        // Durumu temizle
+        setIsDraggingEndpoint(false);
+        draggingLineEndpointRef.current = null;
+        originalLineRef.current = null;
+      }
+    }
+  };
+  
+  // WHEEL - fare tekerleği olayı (zoom)
+  const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    
+    // Get mouse position
+    if (!canvasRef.current) return;
+    
+    const rect = canvasRef.current.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+    
+    // Calculate world coordinates of the mouse position
+    const worldPos = screenToWorld(mouseX, mouseY, canvasState);
+    
+    // Calculate new zoom level
+    const zoomDelta = e.deltaY > 0 ? 0.9 : 1.1; // Reduce zoom on scroll down, increase on scroll up
+    const newZoom = canvasState.zoom * zoomDelta;
+    
+    // Limit zoom range
+    if (newZoom > 0.000001 && newZoom < 100) {
+      // Update zoom first
+      onZoomChange(newZoom);
+      
+      // Calculate the screen position after the zoom change
+      const screenPos = worldToScreen(worldPos.x, worldPos.y, {
+        ...canvasState,
+        zoom: newZoom
+      });
+      
+      // Calculate the difference between where the point is now drawn and where the mouse is
+      const dx = screenPos.x - mouseX;
+      const dy = screenPos.y - mouseY;
+      
+      // Adjust the pan offset to compensate for this difference
+      onPanChange(
+        canvasState.panOffset.x - dx,
+        canvasState.panOffset.y - dy
+      );
+    }
+  };
+
+  // GERI ALMA (Undo) işlemi
+  const handleUndo = useCallback(() => {
+    // İşlem geçmişinde bir şey var mı kontrol et
+    if (actionsHistoryRef.current.length === 0) {
+      console.log("Geri alınacak işlem yok");
+      return;
+    }
+
+    // Son işlemi al
+    const lastAction = actionsHistoryRef.current.pop();
+    
+    if (!lastAction) return;
+    
+    console.log("İşlem geri alınıyor:", lastAction.action);
+
+    switch (lastAction.action) {
+      case 'add_shape':
+        // Son eklenen şekli kaldır
+        if (lastAction.data && lastAction.data.shapeId) {
+          const shapeIndex = shapesRef.current.findIndex(s => s.id === lastAction.data.shapeId);
+          
+          if (shapeIndex !== -1) {
+            // Şekli kaldır
+            shapesRef.current.splice(shapeIndex, 1);
+            
+            // Eğer silinen şekil seçiliyse, seçimi kaldır
+            if (selectedShapeId === lastAction.data.shapeId) {
+              setSelectedShapeId(null);
+              if (onSelectObject) onSelectObject(null);
+            }
+          }
+        }
+        break;
+        
+      case 'update_shape':
+        // Değiştirilen şekli önceki duruma getir
+        if (lastAction.data && lastAction.data.originalShape) {
+          const shapeIndex = shapesRef.current.findIndex(s => s.id === lastAction.data.originalShape.id);
+          
+          if (shapeIndex !== -1) {
+            // Şekli eski haline döndür
+            shapesRef.current[shapeIndex] = lastAction.data.originalShape;
+            
+            // Eğer güncellenen şekil seçiliyse, güncellenmiş bilgileri göster
+            if (selectedShapeId === lastAction.data.originalShape.id && onSelectObject) {
+              onSelectObject(lastAction.data.originalShape);
+            }
+          }
+        }
+        break;
+        
+      case 'delete_shape':
+        // Silinen şekli geri ekle
+        if (lastAction.data && lastAction.data.deletedShape) {
+          shapesRef.current.push(lastAction.data.deletedShape);
+        }
+        break;
+        
+      case 'clear_shapes':
+        // Temizlenen tüm şekilleri geri getir
+        if (lastAction.data && lastAction.data.oldShapes) {
+          shapesRef.current = [...lastAction.data.oldShapes];
+        }
+        break;
+
+      case 'batch_add_shapes':
+        // Toplu eklenen şekilleri geri al
+        if (lastAction.data && Array.isArray(lastAction.data.shapeIds)) {
+          // Silme işlemini her ID için yapalım
+          for (const shapeId of lastAction.data.shapeIds) {
+            const shapeIndex = shapesRef.current.findIndex(s => s.id === shapeId);
+            if (shapeIndex !== -1) {
+              // Şekli kaldır
+              shapesRef.current.splice(shapeIndex, 1);
+              
+              // Eğer silinen şekil seçiliyse, seçimi kaldır
+              if (selectedShapeId === shapeId) {
+                setSelectedShapeId(null);
+                if (onSelectObject) onSelectObject(null);
+              }
+            }
+          }
+          // Hepsi birlikte tek bir işlem olarak geri alındı, konsola log yazalım
+          console.log("Toplu şekil ekleme işlemi geri alındı, silinen şekil sayısı:", lastAction.data.shapeIds.length);
+        }
+        break;
+        
+      default:
+        console.log("Bilinmeyen işlem tipi:", lastAction.action);
+    }
+    
+    console.log("İşlem geri alındı. Kalan işlem sayısı:", actionsHistoryRef.current.length);
+    
+  }, [selectedShapeId, onSelectObject]);
+
+  // Klavye event listener'ı
+  useEffect(() => {
+    // Klavye eventleri için handler
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ctrl+Z / Cmd+Z ile geri alma
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+        e.preventDefault();
+        handleUndo();
+        return;
+      }
+      
+      // Escape tuşu - çizim modunu iptal et
+      if (e.key === 'Escape') {
+        // Çizgi çizimi iptal etme
+        if (drawingLine) {
+          lineFirstPointRef.current = null;
+          currentShapeRef.current = null;
+          setDrawingLine(false);
+        }
+        
+        // Polyline çizimi iptal etme
+        if (drawingPolyline) {
+          polylinePointsRef.current = [];
+          currentShapeRef.current = null;
+          setDrawingPolyline(false);
+        }
+        
+        // Çizgi uç noktası sürükleme işlemini iptal et
+        if (isDraggingEndpoint) {
+          draggingLineEndpointRef.current = null;
+          originalLineRef.current = null;
+          setIsDraggingEndpoint(false);
+        }
+        
+        // Selection tool'a geç
+        if (activeTool !== 'selection' && onToolChange) {
+          onToolChange('selection');
+        }
+      }
+    };
+    
+    // Event listenerları ekle
+    window.addEventListener('keydown', handleKeyDown);
+    
+    // Cleanup
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [activeTool, onSelectObject, onToolChange, drawingLine, drawingPolyline, isDraggingEndpoint, handleUndo]);
+
+  // Custom event handlers - Şekil güncelleme ve alma için
+  useEffect(() => {
+    if (containerRef.current) {
+      const containerElement = containerRef.current;
+      
+      // Tüm şekilleri almak için kullanılan event listener
+      const getAllShapesHandler = ((e: any) => {
+        if (e.detail && typeof e.detail.callback === 'function') {
+          e.detail.callback(shapesRef.current);
+        }
+      }) as EventListener;
+      
+      // Şekil güncelleme ve ekleme olayını dinle
+      const shapeUpdateHandler = ((e: any) => {
+        if (e.detail) {
+          // BATCH işlemi (toplu ekleme) - en üstte kontrol ediyoruz
+          if (e.detail.type === 'batch' && Array.isArray(e.detail.shapes)) {
+            console.log("TEST PARALEL: Batch şekil ekleme işlemi başladı");
+            
+            // İşlem tarihçesine tek bir toplu işlem olarak ekle
+            const shapeIds: number[] = [];
+            
+            // Her şekli ekle
+            e.detail.shapes.forEach((shape: any) => {
+              const newShape = { ...shape };
+              shapesRef.current.push(newShape);
+              shapeIds.push(newShape.id);
+              console.log("TEST PARALEL: Toplu şekil eklendi:", newShape);
+            });
+            
+            // Tüm şekilleri tek bir işlem olarak tarihçeye ekle
+            actionsHistoryRef.current.push({
+              action: 'batch_add_shapes',
+              data: { shapeIds }
+            });
+          }
+          // TEKİL İŞLEMLER - tek bir şekil için
+          else if (e.detail.shape) {
+            // Güncelleme işlemi
+            if (e.detail.type === 'update') {
+              // Güncellenecek şekli bul
+              const shapeIndex = shapesRef.current.findIndex(
+                (s: any) => s.id === e.detail.shape.id
+              );
+              
+              if (shapeIndex !== -1) {
+                // Orijinal şekli kaydet (geri almak için)
+                const originalShape = { ...shapesRef.current[shapeIndex] };
+                
+                // İşlem tarihçesine ekle
+                actionsHistoryRef.current.push({
+                  action: 'update_shape',
+                  data: { originalShape }
+                });
+                
+                // Şekli güncelle
+                shapesRef.current[shapeIndex] = { ...e.detail.shape };
+              }
+            } 
+            // Ekleme işlemi
+            else if (e.detail.type === 'add') {
+              // Yeni şekli ekle
+              const newShape = { ...e.detail.shape };
+              
+              // İşlem tarihçesine ekle
+              actionsHistoryRef.current.push({
+                action: 'add_shape',
+                data: { shapeId: newShape.id }
+              });
+              
+              // Şekli ekle
+              shapesRef.current.push(newShape);
+              console.log("Şekil eklendi:", newShape);
+            }
+          }
+        }
+      }) as EventListener;
+      
+      // Event listener'ları ekle - yalnızca hala kullanılanlar
+      containerElement.addEventListener('getAllShapes', getAllShapesHandler);
+      containerElement.addEventListener('shapeupdate', shapeUpdateHandler);
+      
+      // Cleanup function
+      return () => {
+        containerElement.removeEventListener('getAllShapes', getAllShapesHandler);
+        containerElement.removeEventListener('shapeupdate', shapeUpdateHandler);
+      };
+    }
+    
+    // Cleanup gerekmez
+    return undefined;
+  }, []); // Component mount olduğunda sadece bir kez çalışsın
   
   // Çizginin başlangıç noktasında mı tıklandı kontrolü
   const isNearLineStart = (line: any, point: Point, tolerance: number): boolean => {
@@ -611,6 +925,7 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
     return null; // Hiçbir nokta tolerans içinde değil
   };
 
+  // Find a shape at the given point
   const findShapeAtPoint = (point: Point): any | null => {
     // Zoom seviyesine göre seçim toleransını hesapla
     // Zoom büyükse tolerans düşük, zoom küçükse tolerans yüksek olmalı
@@ -691,719 +1006,31 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
           }
           break;
           
-        // Rectangle ve circle case'leri kaldırıldı
-          
         case 'text':
           // For text, simplified check using a rectangular area
           // Would need more sophisticated checking for actual text bounds
           // Create a bounding box for the text
           const textBounds = {
             x: shape.x,
-            y: shape.y - shape.fontSize,
-            width: shape.text.length * shape.fontSize * 0.6, // Rough estimate
-            height: shape.fontSize * 1.2
+            y: shape.y - shape.fontSize, // Adjust Y to account for text height
+            width: shape.text.length * (shape.fontSize * 0.6), // Estimate width based on fontSize
+            height: shape.fontSize * 1.2 // Add some extra height
           };
           
-          // Text için de biraz tolerans ekle
-          const expandedTextBounds = {
-            x: textBounds.x - tolerance,
-            y: textBounds.y - tolerance,
-            width: textBounds.width + 2 * tolerance,
-            height: textBounds.height + 2 * tolerance
-          };
-          
-          if (point.x >= expandedTextBounds.x && 
-              point.x <= expandedTextBounds.x + expandedTextBounds.width && 
-              point.y >= expandedTextBounds.y && 
-              point.y <= expandedTextBounds.y + expandedTextBounds.height) {
+          // Check if point is inside text bounds
+          if (point.x >= textBounds.x && point.x <= textBounds.x + textBounds.width &&
+              point.y >= textBounds.y && point.y <= textBounds.y + textBounds.height) {
             return shape;
           }
           break;
       }
     }
     
+    // No shape found at this point
     return null;
   };
 
-  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!canvasRef.current) return;
-    
-    const rect = canvasRef.current.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    
-    // Convert to world coordinates
-    const worldPos = screenToWorld(x, y, canvasState);
-    
-    // Paralel çizgi kodu tamamen kaldırıldı
-    
-    // Orta fare tuşu için kaydırma (pan) işlemini başlat
-    if (e.button === 1) { // 1 = orta fare tuşu (tekerlek)
-      isDraggingRef.current = true;
-      setIsDragging(true); // UI için
-      dragStartRef.current = { x: e.clientX, y: e.clientY };
-      
-      // Cursor doğrudan burada ayarlanıyor
-      if (canvasRef.current) {
-        canvasRef.current.style.cursor = 'grabbing';
-      }
-      return;
-    }
-    
-    // Sol fare tuşu için araçlara göre farklı davranışlar
-    if (e.button === 0) { // 0 = sol fare tuşu
-      if (activeTool === 'selection') {
-        // Selection tool için nesne seçme
-        const selectedShape = findShapeAtPoint(worldPos);
-        
-        if (selectedShape && onSelectObject) {
-          // Seçili şeklin indeksini bul
-          const shapeIndex = shapesRef.current.findIndex(s => s.id === selectedShape.id);
-          
-          // Seçili şeklin ID'sini ayarla
-          setSelectedShapeId(selectedShape.id);
-          
-          // Canvas'ın yeniden çizilmesini sağlamak için referansı güncelle
-          if (shapeIndex !== -1) {
-            shapesRef.current[shapeIndex] = { ...selectedShape };
-          }
-          
-          onSelectObject(selectedShape);
-        } else {
-          // Hiçbir şekil seçilmediyse seçimi temizle
-          setSelectedShapeId(null);
-          if (onSelectObject) onSelectObject(null);
-        }
-      } else {
-        // Diğer çizim araçları için
-        isDraggingRef.current = true;
-        setIsDragging(true); // UI için
-        dragStartRef.current = { x: e.clientX, y: e.clientY };
-        
-        if (activeTool === 'point') {
-          // Snap özelliği için kontrol yap
-          const snapTolerance = 10 / canvasState.zoom; // Zoom'a göre ayarlanmış tolerans
-          // Snap özelliği kapalıysa null, açıksa en yakın snap noktasını kullan
-          const snapPoint = snapEnabled
-            ? findNearestSnapPoint(worldPos, shapesRef.current, snapTolerance)
-            : null;
-          
-          // Eğer yakalama noktası varsa onu kullan, yoksa normal fare pozisyonunu kullan
-          const pointPosition = snapPoint || worldPos;
-          
-          // Yeni nokta oluştur
-          const newPoint = {
-            id: nextIdRef.current++,
-            type: 'point',
-            x: pointPosition.x,
-            y: pointPosition.y,
-            style: 'default'
-          };
-          
-          // İşlem tarihçesine ekle (geri almak için)
-          actionsHistoryRef.current.push({
-            action: 'add_shape',
-            data: { shapeId: newPoint.id }
-          });
-          
-          // Şekli ekle
-          shapesRef.current.push(newPoint);
-          // Otomatik seçim özelliğini kaldırdık
-        } else if (activeTool === 'line') {
-          // Eğer daha önce ilk nokta seçilmemişse (çizgi çizme işleminin başlangıcı)
-          if (!drawingLine) {
-            // Snap (yakalama) noktası kontrolü - en yakın yakalama noktasını bul
-            const snapTolerance = 10 / canvasState.zoom; // Zoom'a göre ayarlanmış tolerans
-            // Snap özelliği kapalıysa null, açıksa en yakın snap noktasını kullan
-            const snapPoint = snapEnabled
-              ? findNearestSnapPoint(worldPos, shapesRef.current, snapTolerance)
-              : null;
-            
-            // Eğer yakalama noktası varsa onu kullan, yoksa normal fare pozisyonunu kullan
-            const startPoint = snapPoint || worldPos;
-            
-            // İlk noktayı kaydet
-            lineFirstPointRef.current = { x: startPoint.x, y: startPoint.y };
-            setDrawingLine(true);
-            
-            // Geçici gösterim için çizgi oluştur
-            currentShapeRef.current = {
-              type: 'line',
-              startX: startPoint.x,
-              startY: startPoint.y,
-              endX: startPoint.x,
-              endY: startPoint.y,
-              thickness: 1
-            };
-          } else {
-            // İkinci tıklama - çizgiyi tamamla
-            if (lineFirstPointRef.current) {
-              // Snap (yakalama) noktası kontrolü - en yakın yakalama noktasını bul
-              const snapTolerance = 10 / canvasState.zoom; // Zoom'a göre ayarlanmış tolerans
-              // Snap özelliği kapalıysa null, açıksa en yakın snap noktasını kullan
-              const snapPoint = snapEnabled
-                ? findNearestSnapPoint(worldPos, shapesRef.current, snapTolerance)
-                : null;
-              
-              // Eğer yakalama noktası varsa onu kullan, yoksa normal fare pozisyonunu kullan
-              let endPoint = snapPoint || worldPos;
-              
-              // Ortho modu açıksa, çizgiyi yatay veya dikey olarak zorla
-              if (orthoEnabled && !snapPoint) { // Snap noktası varsa, snap'e öncelik ver
-                // İlk nokta ile fare pozisyonu arasındaki delta değerlerini hesapla
-                const dx = Math.abs(endPoint.x - lineFirstPointRef.current.x);
-                const dy = Math.abs(endPoint.y - lineFirstPointRef.current.y);
-                
-                // Hangisi daha büyük - yatay veya dikey çizim
-                if (dx > dy) {
-                  // Yatay çizgi (y değerini sabit tut)
-                  endPoint = {
-                    x: endPoint.x,
-                    y: lineFirstPointRef.current.y
-                  };
-                } else {
-                  // Dikey çizgi (x değerini sabit tut)
-                  endPoint = {
-                    x: lineFirstPointRef.current.x, 
-                    y: endPoint.y
-                  };
-                }
-              }
-              
-              // Tamamlanmış çizgiyi oluştur
-              const newLine = {
-                id: nextIdRef.current++,
-                type: 'line',
-                startX: lineFirstPointRef.current.x,
-                startY: lineFirstPointRef.current.y,
-                endX: endPoint.x,
-                endY: endPoint.y,
-                thickness: 1
-              };
-              
-              // İşlem tarihçesine ekle
-              actionsHistoryRef.current.push({
-                action: 'add_shape',
-                data: { shapeId: newLine.id }
-              });
-              
-              // Şekli ekle
-              shapesRef.current.push(newLine);
-              
-              // Otomatik seçim özelliğini kaldırdık
-              
-              // Çizim modunu kapat ve referansları temizle
-              lineFirstPointRef.current = null;
-              currentShapeRef.current = null;
-              setDrawingLine(false);
-            }
-          }
-        } else if (activeTool === 'polyline') {
-          // Sürükleme durumunu kaldır - polyline çizerken sürükleme kullanmıyoruz
-          isDraggingRef.current = false;
-          setIsDragging(false);
-          
-          // Eğer devam eden bir polyline çizimi varsa, mevcut noktaları dikkate al
-          let shapesWithTempPolyline = [...shapesRef.current];
-          if (drawingPolyline && polylinePointsRef.current.length > 0) {
-            // Şu anda çizilmekte olan polyline noktalarını da dikkate al
-            const tempPolyline = {
-              id: -999, // Geçici ID
-              type: 'polyline',
-              points: [...polylinePointsRef.current],
-              thickness: 1,
-              closed: false
-            };
-            shapesWithTempPolyline.push(tempPolyline);
-          }
-          
-          // Snap (yakalama) noktası kontrolü - güncellenmiş şekil listemizi kullanalım
-          const snapTolerance = 10 / canvasState.zoom; // Zoom'a göre ayarlanmış tolerans
-          // Snap özelliği kapalıysa null, açıksa en yakın snap noktasını kullan
-          const snapPoint = snapEnabled
-            ? findNearestSnapPoint(worldPos, shapesWithTempPolyline, snapTolerance)
-            : null;
-          
-          // Eğer yakalama noktası varsa onu kullan, yoksa normal fare pozisyonunu kullan
-          const clickPoint = snapPoint || worldPos;
-          
-          // Eğer polyline çizimi başlamadıysa, başlat
-          if (!drawingPolyline) {
-            // Yeni polyline başlat
-            polylinePointsRef.current = [{ x: clickPoint.x, y: clickPoint.y }];
-            setDrawingPolyline(true);
-            
-            // Geçici gösterim için polyline oluştur (ilk nokta)
-            currentShapeRef.current = {
-              id: -1, // Geçici ID
-              type: 'polyline',
-              points: [...polylinePointsRef.current],
-              thickness: 1,
-              closed: false,
-              previewPoint: clickPoint // İlk nokta için önizleme ekle
-            };
-          } else {
-            // Polyline'a yeni nokta ekle
-            // Son eklenen nokta ile konumu hesapla
-            let newPoint = { x: clickPoint.x, y: clickPoint.y };
-            
-            // Ortho modu açıksa ve en az bir nokta eklenmişse, yeni noktayı ortho modunda ekle
-            if (orthoEnabled && !snapPoint && polylinePointsRef.current.length > 0) {
-              const lastPoint = polylinePointsRef.current[polylinePointsRef.current.length - 1];
-              
-              // Son nokta ile fare pozisyonu arasındaki delta değerlerini hesapla
-              const dx = Math.abs(newPoint.x - lastPoint.x);
-              const dy = Math.abs(newPoint.y - lastPoint.y);
-              
-              // Hangisi daha büyük - yatay veya dikey çizim
-              if (dx > dy) {
-                // Yatay çizgi (y değerini sabit tut)
-                newPoint = {
-                  x: newPoint.x,
-                  y: lastPoint.y
-                };
-              } else {
-                // Dikey çizgi (x değerini sabit tut)
-                newPoint = {
-                  x: lastPoint.x,
-                  y: newPoint.y
-                };
-              }
-            }
-            
-            polylinePointsRef.current.push(newPoint);
-            
-            // Geçici gösterimi güncelle - noktalar ve mevcut fare konumu
-            if (currentShapeRef.current) {
-              currentShapeRef.current = {
-                ...currentShapeRef.current,
-                points: [...polylinePointsRef.current],
-                previewPoint: newPoint // Mevcut tıklama noktasına önizleme güncelle
-              };
-            }
-          }
-        // Rectangle ve circle araçları kaldırıldı
-        }
-      }
-    }
-  };
-  
-
-  
-  const handleMouseUp = () => {
-    isDraggingRef.current = false;
-    setIsDragging(false); // UI için
-    
-    // Çizgi uç noktası sürükleme işlemini sonlandır
-    if (isDraggingEndpoint && originalLineRef.current) {
-      // Şekil ID'sini bul
-      const shapeId = originalLineRef.current.id;
-      
-      // Değişiklik öncesi durumu işlem tarihçesine ekle
-      actionsHistoryRef.current.push({
-        action: 'update_shape',
-        data: { originalShape: originalLineRef.current }
-      });
-      
-      // Sürükleme durumunu temizle
-      setIsDraggingEndpoint(false);
-      draggingLineEndpointRef.current = null;
-      originalLineRef.current = null;
-    }
-    
-    // Reset cursor
-    if (canvasRef.current) {
-      if (activeTool === 'selection') {
-        canvasRef.current.style.cursor = 'grab';
-      } else {
-        canvasRef.current.style.cursor = 'crosshair';
-      }
-    }
-    
-    // Polyline aracı için currentShapeRef'i koruyoruz, çünkü şekil mouseDown'da shapesRef'e ekleniyor
-    // mouseUp'ta sadece sürükleme durumunu sıfırlıyoruz
-    if (activeTool === 'polyline' && drawingPolyline) {
-      return; // Polyline aracı için MouseUp işlemini kapat
-    }
-    
-    // Çizgi aracı için handleMouseUp'ta bir şey yapmayalım - tüm işlem mouseDown'da gerçekleşiyor
-    if (activeTool === 'line') {
-      return; // Çizgi aracı için MouseUp işlemini kapat
-    }
-    
-    // Diğer araçlar için şekli ekle
-    if (currentShapeRef.current && activeTool !== 'selection') {
-      shapesRef.current.push(currentShapeRef.current);
-      currentShapeRef.current = null;
-    }
-  };
-  
-  const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
-    
-    // Get mouse position
-    if (!canvasRef.current) return;
-    
-    const rect = canvasRef.current.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-    
-    // Calculate world coordinates of the mouse position
-    const worldPos = screenToWorld(mouseX, mouseY, canvasState);
-    
-    // Calculate new zoom level
-    const zoomDelta = e.deltaY > 0 ? 0.9 : 1.1; // Reduce zoom on scroll down, increase on scroll up
-    const newZoom = canvasState.zoom * zoomDelta;
-    
-    // Limit zoom range
-    if (newZoom > 0.000001 && newZoom < 100) {
-      // Update zoom first
-      onZoomChange(newZoom);
-      
-      // Calculate the screen position after the zoom change
-      const screenPos = worldToScreen(worldPos.x, worldPos.y, {
-        ...canvasState,
-        zoom: newZoom
-      });
-      
-      // Calculate the difference between where the point is now drawn and where the mouse is
-      const dx = screenPos.x - mouseX;
-      const dy = screenPos.y - mouseY;
-      
-      // Adjust the pan offset to compensate for this difference
-      onPanChange(
-        canvasState.panOffset.x - dx,
-        canvasState.panOffset.y - dy
-      );
-    }
-  };
-  
-  // İlk render için olan useEffect kaldırıldı çünkü artık activeTool değişim efekti bunu kapsıyor
-  
-  // ESKİ EVENT SİSTEMİ TAMAMEN KALDIRILDI
-  // Bu eski useEffect'ler ve event handler'ları kaldırıldı çünkü yeni sistemde
-  // zaten aynı olayları dinleyen başka bir useEffect var ve bu iki dinleyicinin olması
-  // her olayın iki kez işlenmesine sebep oluyordu.
-  
-  // ESKİ KODUN TAMAMI ÇIKARILDI
-  
-  // NOT: Bu eski kod, aşağıdaki useEffect ile çakışıyordu:
-  // `useEffect(() => { const containerElement = containerRef.current; ... })`
-  
-  // ESC tuşuna basıldığında seçimi iptal et ve seçim aracına geç
-  // Escape tuşu işlemini memoize ediyoruz - performans için
-  // Geri alma (undo) işlemi - Operasyon bazlı geri alma
-  const handleUndo = useCallback(() => {
-    // İşlem geçmişinde bir şey var mı kontrol et
-    if (actionsHistoryRef.current.length === 0) {
-      console.log("Geri alınacak işlem yok");
-      return;
-    }
-
-    // Son işlemi al
-    const lastAction = actionsHistoryRef.current.pop();
-    
-    if (!lastAction) return;
-    
-    console.log("İşlem geri alınıyor:", lastAction.action);
-
-    switch (lastAction.action) {
-      case 'add_shape':
-        // Son eklenen şekli kaldır
-        if (lastAction.data && lastAction.data.shapeId) {
-          const shapeIndex = shapesRef.current.findIndex(s => s.id === lastAction.data.shapeId);
-          
-          if (shapeIndex !== -1) {
-            // Şekli kaldır
-            shapesRef.current.splice(shapeIndex, 1);
-            
-            // Eğer silinen şekil seçiliyse, seçimi kaldır
-            if (selectedShapeId === lastAction.data.shapeId) {
-              setSelectedShapeId(null);
-              if (onSelectObject) onSelectObject(null);
-            }
-          }
-        }
-        break;
-        
-      case 'update_shape':
-        // Değiştirilen şekli önceki duruma getir
-        if (lastAction.data && lastAction.data.originalShape) {
-          const shapeIndex = shapesRef.current.findIndex(s => s.id === lastAction.data.originalShape.id);
-          
-          if (shapeIndex !== -1) {
-            // Şekli eski haline döndür
-            shapesRef.current[shapeIndex] = lastAction.data.originalShape;
-            
-            // Eğer güncellenen şekil seçiliyse, güncellenmiş bilgileri göster
-            if (selectedShapeId === lastAction.data.originalShape.id && onSelectObject) {
-              onSelectObject(lastAction.data.originalShape);
-            }
-          }
-        }
-        break;
-        
-      case 'delete_shape':
-        // Silinen şekli geri ekle
-        if (lastAction.data && lastAction.data.deletedShape) {
-          shapesRef.current.push(lastAction.data.deletedShape);
-        }
-        break;
-        
-      case 'clear_shapes':
-        // Temizlenen tüm şekilleri geri getir
-        if (lastAction.data && lastAction.data.oldShapes) {
-          shapesRef.current = [...lastAction.data.oldShapes];
-        }
-        break;
-        
-      case 'batch_add_shapes':
-        // Toplu eklenen şekilleri geri al
-        if (lastAction.data && Array.isArray(lastAction.data.shapeIds)) {
-          // Silme işlemini her ID için yapalım
-          for (const shapeId of lastAction.data.shapeIds) {
-            const shapeIndex = shapesRef.current.findIndex(s => s.id === shapeId);
-            if (shapeIndex !== -1) {
-              // Şekli kaldır
-              shapesRef.current.splice(shapeIndex, 1);
-              
-              // Eğer silinen şekil seçiliyse, seçimi kaldır
-              if (selectedShapeId === shapeId) {
-                setSelectedShapeId(null);
-                if (onSelectObject) onSelectObject(null);
-              }
-            }
-          }
-          // Hepsi birlikte tek bir işlem olarak geri alındı, konsola log yazalım
-          console.log("Toplu şekil ekleme işlemi geri alındı, silinen şekil sayısı:", lastAction.data.shapeIds.length);
-        }
-        break;
-        
-      default:
-        console.log("Bilinmeyen işlem tipi:", lastAction.action);
-    }
-    
-    console.log("İşlem geri alındı. Kalan işlem sayısı:", actionsHistoryRef.current.length);
-    
-  }, [selectedShapeId, onSelectObject]);
-  
-  const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    // CTRL+Z geri al (Mac için Command+Z)
-    if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
-      e.preventDefault(); // Tarayıcının varsayılan geri alma davranışını engelle
-      handleUndo();
-      return;
-    }
-    
-    // Escape tuşu - işlemi iptal et
-    if (e.key === 'Escape') {
-      // Seçili şekli temizle
-      setSelectedShapeId(null);
-      
-      // Üst bileşene bildir
-      if (onSelectObject) {
-        onSelectObject(null);
-      }
-      
-      // Çizim durumunu sıfırla
-      const isDrawing = drawingLine || drawingPolyline || isDraggingEndpoint;
-      
-      // Çizgi çizme işlemini iptal et
-      if (drawingLine) {
-        lineFirstPointRef.current = null;
-        currentShapeRef.current = null;
-        setDrawingLine(false);
-      }
-      
-      // Polyline çizim işlemini iptal et
-      if (drawingPolyline) {
-        polylinePointsRef.current = [];
-        currentShapeRef.current = null;
-        setDrawingPolyline(false);
-      }
-      
-      // Çizgi uç noktası sürükleme işlemini iptal et
-      if (isDraggingEndpoint) {
-        draggingLineEndpointRef.current = null;
-        originalLineRef.current = null;
-        setIsDraggingEndpoint(false);
-      }
-      
-      // Eğer seçim aracında değilsek seçim aracına geç
-      // Çizim yaparken ya da aracımız 'selection' değilse selection aracına geç
-      if ((isDrawing || activeTool !== 'selection') && onToolChange) {
-        onToolChange('selection');
-      }
-    }
-  }, [activeTool, onSelectObject, onToolChange, drawingLine, drawingPolyline, isDraggingEndpoint, handleUndo]);
-  
-  // Keyboard eventleri için ayrı bir useEffect
-  useEffect(() => {
-    // Event listener ekle
-    window.addEventListener('keydown', handleKeyDown);
-    
-    // Cleanup
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [handleKeyDown]); // Sadece handleKeyDown değiştiğinde bağla
-  
-  // Özel eventleri dinlemek için ayrı bir useEffect - bu sayede döngüsel bağımlılıkları önlüyoruz
-  useEffect(() => {
-    if (containerRef.current) {
-      const containerElement = containerRef.current;
-      
-      // Fit View için şekilleri alma olayını dinle
-      const getAllShapesHandler = ((e: any) => {
-        // Tüm şekilleri al ve callback'e gönder
-        if (e.detail && typeof e.detail.callback === 'function') {
-          e.detail.callback(shapesRef.current);
-        }
-      }) as EventListener;
-      
-      // Şekil güncelleme ve ekleme olayını dinle
-      const shapeUpdateHandler = ((e: any) => {
-        if (e.detail) {
-          // BATCH işlemi (toplu ekleme) - en üstte kontrol ediyoruz
-          if (e.detail.type === 'batch' && Array.isArray(e.detail.shapes)) {
-            console.log("TEST PARALEL: Batch şekil ekleme işlemi başladı");
-            
-            // İşlem tarihçesine tek bir toplu işlem olarak ekle
-            const shapeIds: number[] = [];
-            
-            // Her şekli ekle
-            e.detail.shapes.forEach((shape: any) => {
-              const newShape = { ...shape };
-              shapesRef.current.push(newShape);
-              shapeIds.push(newShape.id);
-              console.log("TEST PARALEL: Toplu şekil eklendi:", newShape);
-            });
-            
-            // Tüm şekilleri tek bir işlem olarak tarihçeye ekle
-            actionsHistoryRef.current.push({
-              action: 'batch_add_shapes',
-              data: { shapeIds }
-            });
-          }
-          // TEKİL İŞLEMLER - tek bir şekil için
-          else if (e.detail.shape) {
-            // Güncelleme işlemi
-            if (e.detail.type === 'update') {
-              // Güncellenecek şekli bul
-              const shapeIndex = shapesRef.current.findIndex(
-                (s: any) => s.id === e.detail.shape.id
-              );
-              
-              if (shapeIndex !== -1) {
-                // Orijinal şekli kaydet (geri almak için)
-                const originalShape = { ...shapesRef.current[shapeIndex] };
-                
-                // İşlem tarihçesine ekle
-                actionsHistoryRef.current.push({
-                  action: 'update_shape',
-                  data: { originalShape }
-                });
-                
-                // Şekli güncelle
-                shapesRef.current[shapeIndex] = { ...e.detail.shape };
-              }
-            } 
-            // Ekleme işlemi
-            else if (e.detail.type === 'add') {
-              // Yeni şekli ekle
-              const newShape = { ...e.detail.shape };
-              
-              // İşlem tarihçesine ekle
-              actionsHistoryRef.current.push({
-                action: 'add_shape',
-                data: { shapeId: newShape.id }
-              });
-              
-              // Şekli ekle
-              shapesRef.current.push(newShape);
-              console.log("Şekil eklendi:", newShape);
-            }
-          }
-        }
-      }) as EventListener;
-      
-      // Artık bu kodları tamamen kaldırıyoruz
-      
-      // Event listener'ları ekle - yalnızca hala kullanılanlar
-      containerElement.addEventListener('getAllShapes', getAllShapesHandler);
-      containerElement.addEventListener('shapeupdate', shapeUpdateHandler);
-      
-      // Cleanup function
-      return () => {
-        containerElement.removeEventListener('getAllShapes', getAllShapesHandler);
-        containerElement.removeEventListener('shapeupdate', shapeUpdateHandler);
-      };
-    }
-    
-    // Cleanup gerekmez
-    return undefined;
-  }, []); // Component mount olduğunda sadece bir kez çalışsın
-  
-  // Araç değiştiğinde seçimi iptal et ve imleci güncelle
-  // activeTool değiştikçe çalışacak
-  const prevToolRef = useRef(activeTool);
-  
-  // Çizim durumlarını sıfırlayan yardımcı fonksiyon - daha temiz bir yaklaşım
-  const resetDrawingStates = useCallback(() => {
-    // Çizgi çizme işlemini iptal et
-    if (drawingLine) {
-      lineFirstPointRef.current = null;
-      currentShapeRef.current = null;
-      setDrawingLine(false);
-    }
-    
-    // Polyline çizim işlemini iptal et
-    if (drawingPolyline) {
-      polylinePointsRef.current = [];
-      currentShapeRef.current = null;
-      setDrawingPolyline(false);
-    }
-    
-    // Çizgi uç noktası sürükleme işlemini iptal et
-    if (isDraggingEndpoint) {
-      draggingLineEndpointRef.current = null;
-      originalLineRef.current = null;
-      setIsDraggingEndpoint(false);
-    }
-  }, [drawingLine, drawingPolyline, isDraggingEndpoint]);
-  
-  // Tool değişikliğini yakalayan useEffect
-  useEffect(() => {
-    // Eğer aktiveTool değişmediyse hiçbir şey yapma
-    if (prevToolRef.current === activeTool) {
-      return;
-    }
-    
-    // Araç değiştiğinde referansı güncelle
-    prevToolRef.current = activeTool;
-    
-    // Seçili şekli temizle
-    setSelectedShapeId(null);
-    
-    // Üst bileşene bildir
-    if (onSelectObject) {
-      onSelectObject(null);
-    }
-    
-    // Çizim durumlarını sıfırla
-    resetDrawingStates();
-    
-    // İmleç stilini güncelle
-    if (canvasRef.current) {
-      if (activeTool === 'selection') {
-        canvasRef.current.style.cursor = 'grab';
-      } else {
-        canvasRef.current.style.cursor = 'crosshair';
-      }
-    }
-  }, [activeTool, onSelectObject, resetDrawingStates]);
-  
-  // Sağ tıklama işlemleri
+  // Right-click menu handler
   const handleContextMenu = (e: React.MouseEvent<HTMLCanvasElement>) => {
     e.preventDefault(); // Sağ tık menüsünü engelle
     
