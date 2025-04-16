@@ -1,7 +1,8 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { CanvasState, Tool, Point } from '@/types';
-import { screenToWorld, worldToScreen, drawGrid, drawShape, drawSnapIndicators } from '@/lib/canvasUtils';
-import { pointNearLine, pointNearPolyline, distance, findNearestSnapPoint } from '@/lib/drawingPrimitives';
+import { drawGrid, drawShape, drawSnapIndicators, screenToWorld, worldToScreen } from '@/lib/canvasUtils';
+import { distance, findNearestSnapPoint } from '@/lib/drawingPrimitives';
+import { useCanvasEvents } from '@/hooks/useCanvasEvents'; // Yeni hook'u import ediyoruz
 
 interface DrawingCanvasProps {
   canvasState: CanvasState;
