@@ -2,6 +2,7 @@ import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { CanvasState, Tool, Point } from '@/types';
 import { screenToWorld, worldToScreen, drawGrid, drawShape, drawSnapIndicators } from '@/lib/canvasUtils';
 import { pointNearLine, pointNearPolyline, distance, findNearestSnapPoint } from '@/lib/drawingPrimitives';
+import { useDrawingLogic } from '@/hooks/useDrawingLogic';
 
 interface DrawingCanvasProps {
   canvasState: CanvasState;
@@ -36,25 +37,38 @@ const DrawingCanvas: React.FC<DrawingCanvasProps> = ({
   const shapesRef = useRef<any[]>([]); 
   const shapesHistoryRef = useRef<any[][]>([]); // Şekillerin geçmiş durumlarını saklamak için
   const actionsHistoryRef = useRef<{action: string, data: any}[]>([]); // Yapılan işlemlerin tarihçesi
-  const currentShapeRef = useRef<any | null>(null);
   const dragStartRef = useRef<Point>({ x: 0, y: 0 });
   const isDraggingRef = useRef<boolean>(false);
-  const lineFirstPointRef = useRef<Point | null>(null); // Çizgi ilk noktası referansı
   const requestRef = useRef<number | null>(null); // AnimationFrame request ID
   const nextIdRef = useRef<number>(1); // Şekiller için benzersiz ID'ler
   const draggingLineEndpointRef = useRef<'start' | 'end' | 'vertex' | null>(null); // Hangi uç veya noktanın sürüklendiği
   const originalLineRef = useRef<any | null>(null); // Sürükleme başladığında çizginin orijinal hali
   const currentMousePosRef = useRef<Point>({ x: 0, y: 0 }); // Mevcut fare pozisyonu
+  const lineFirstPointRef = useRef<Point | null>(null); // Çizgi ilk noktası referansı
   const polylinePointsRef = useRef<Point[]>([]); // Polyline'ın noktaları
   const parallelPreviewsRef = useRef<any[]>([]); // Paralel çizgi önizlemeleri
   const [temporarySelection, setTemporarySelection] = useState<boolean>(false); // Geçici seçim modu (paralel modunda)
   
   // UI State (Cursor değişimi vb. için state kullanıyoruz)
   const [isDragging, setIsDragging] = useState<boolean>(false);
-  const [drawingLine, setDrawingLine] = useState<boolean>(false); // Çizgi çizim durumu
   const [selectedShapeId, setSelectedShapeId] = useState<number | null>(null); // Seçilen şeklin ID'si
   const [isDraggingEndpoint, setIsDraggingEndpoint] = useState<boolean>(false); // Çizgi uç noktası sürükleme durumu
-  const [drawingPolyline, setDrawingPolyline] = useState<boolean>(false); // Polyline çizim durumu
+  
+  // UseDrawingLogic hook'unu kullan - Çizim mantığını burada yönetiyoruz
+  const drawingLogic = useDrawingLogic({
+    activeTool,
+    canvasState,
+    nextIdRef,
+    shapesRef,
+    actionsHistoryRef,
+    snapEnabled,
+    orthoEnabled
+  });
+  
+  // DrawingLogic'ten gelen state'leri kullan
+  const drawingLine = drawingLogic.drawingLine;
+  const drawingPolyline = drawingLogic.drawingPolyline;
+  const currentShapeRef = { current: drawingLogic.currentShape };
   
   // Handle canvas resize
   // Resize handler - onCanvasSizeChange'i ref olarak tutuyoruz
