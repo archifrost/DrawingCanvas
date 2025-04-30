@@ -11,47 +11,20 @@ export const users = pgTable("users", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
-// Enum for shape types
-export const shapeTypeEnum = pgEnum("shape_type", ["point", "line", "rectangle", "circle", "text"]);
+// Enum for shape types - REMOVED as it was drawing specific
+// export const shapeTypeEnum = pgEnum("shape_type", ["point", "line", "rectangle", "circle", "text"]);
 
-// Drawing table to store user drawings
-export const drawings = pgTable("drawings", {
-  id: serial("id").primaryKey(),
-  name: text("name").notNull(),
-  description: text("description"),
-  userId: integer("user_id").references(() => users.id, { onDelete: 'cascade' }),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+// Drawing table REMOVED
+// export const drawings = ... (removed)
 
-// Setup relations for drawings to users (many-to-one)
-export const drawingsRelations = relations(drawings, ({ one }) => ({
-  user: one(users, {
-    fields: [drawings.userId],
-    references: [users.id],
-  }),
-  shapes: one(shapes, {
-    fields: [drawings.id],
-    references: [shapes.drawingId],
-  }),
-}));
+// Setup relations for drawings REMOVED
+// export const drawingsRelations = ... (removed)
 
-// Shapes table to store drawing shapes
-export const shapes = pgTable("shapes", {
-  id: serial("id").primaryKey(),
-  drawingId: integer("drawing_id").references(() => drawings.id, { onDelete: 'cascade' }).notNull(),
-  type: shapeTypeEnum("type").notNull(),
-  properties: json("properties").notNull(), // Store shape-specific properties as JSON
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+// Shapes table REMOVED
+// export const shapes = ... (removed)
 
-// Setup relations for shapes to drawings (many-to-one)
-export const shapesRelations = relations(shapes, ({ one }) => ({
-  drawing: one(drawings, {
-    fields: [shapes.drawingId],
-    references: [drawings.id],
-  }),
-}));
+// Setup relations for shapes REMOVED
+// export const shapesRelations = ... (removed)
 
 // Schema definitions for insert operations
 export const insertUserSchema = createInsertSchema(users).pick({
@@ -59,17 +32,7 @@ export const insertUserSchema = createInsertSchema(users).pick({
   password: true,
 });
 
-export const insertDrawingSchema = createInsertSchema(drawings).pick({
-  name: true,
-  description: true,
-  userId: true,
-});
-
-export const insertShapeSchema = createInsertSchema(shapes).pick({
-  drawingId: true,
-  type: true,
-  properties: true,
-});
+// Insert schemas for drawings and shapes REMOVED
 
 // Project Analysis Table
 export const projectAnalyses = pgTable("project_analyses", {
@@ -93,7 +56,7 @@ export const projectAnalyses = pgTable("project_analyses", {
   ground_coverage_ratio: numeric("ground_coverage_ratio"),
   floor_area_ratio: numeric("floor_area_ratio"),
   parcel_coordinates: json("parcel_coordinates").notNull().default('[]'), // JSON array of coordinates
-  drawingId: integer("drawing_id").references(() => drawings.id),
+  // drawingId: integer("drawing_id").references(() => drawings.id), // REMOVED
   userId: integer("user_id").references(() => users.id),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
@@ -104,10 +67,10 @@ export const projectAnalysesRelations = relations(projectAnalyses, ({ one }) => 
     fields: [projectAnalyses.userId],
     references: [users.id],
   }),
-  drawing: one(drawings, {
-    fields: [projectAnalyses.drawingId],
-    references: [drawings.id],
-  }),
+  // drawing: one(drawings, {
+  //   fields: [projectAnalyses.drawingId],
+  //   references: [drawings.id],
+  // }), // REMOVED
 }));
 
 // Insert Schema for projectAnalyses
@@ -120,11 +83,7 @@ export const insertProjectAnalysisSchema = createInsertSchema(projectAnalyses).o
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
 
-export type InsertDrawing = z.infer<typeof insertDrawingSchema>;
-export type Drawing = typeof drawings.$inferSelect;
-
-export type InsertShape = z.infer<typeof insertShapeSchema>;
-export type Shape = typeof shapes.$inferSelect;
+// Type definitions for drawings and shapes REMOVED
 
 // Feedback tablosu
 export const feedbacks = pgTable("feedbacks", {

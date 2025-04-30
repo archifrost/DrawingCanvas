@@ -54,63 +54,9 @@ export class DatabaseStorage implements IStorage {
     return user;
   }
   
-  // Drawing methods
-  async getDrawing(id: number): Promise<Drawing | undefined> {
-    const [drawing] = await db.select().from(drawings).where(eq(drawings.id, id));
-    return drawing;
-  }
+  // Drawing methods REMOVED
   
-  async getUserDrawings(userId: number): Promise<Drawing[]> {
-    return await db.select().from(drawings).where(eq(drawings.userId, userId));
-  }
-  
-  async createDrawing(drawing: InsertDrawing): Promise<Drawing> {
-    const [newDrawing] = await db.insert(drawings).values(drawing).returning();
-    return newDrawing;
-  }
-  
-  async updateDrawing(id: number, drawing: Partial<InsertDrawing>): Promise<Drawing | undefined> {
-    const [updatedDrawing] = await db
-      .update(drawings)
-      .set(drawing)
-      .where(eq(drawings.id, id))
-      .returning();
-    return updatedDrawing;
-  }
-  
-  async deleteDrawing(id: number): Promise<boolean> {
-    const result = await db.delete(drawings).where(eq(drawings.id, id)).returning({ id: drawings.id });
-    return result.length > 0;
-  }
-  
-  // Shape methods
-  async getShape(id: number): Promise<Shape | undefined> {
-    const [shape] = await db.select().from(shapes).where(eq(shapes.id, id));
-    return shape;
-  }
-  
-  async getDrawingShapes(drawingId: number): Promise<Shape[]> {
-    return await db.select().from(shapes).where(eq(shapes.drawingId, drawingId));
-  }
-  
-  async createShape(shape: InsertShape): Promise<Shape> {
-    const [newShape] = await db.insert(shapes).values(shape).returning();
-    return newShape;
-  }
-  
-  async updateShape(id: number, shape: Partial<InsertShape>): Promise<Shape | undefined> {
-    const [updatedShape] = await db
-      .update(shapes)
-      .set(shape)
-      .where(eq(shapes.id, id))
-      .returning();
-    return updatedShape;
-  }
-  
-  async deleteShape(id: number): Promise<boolean> {
-    const result = await db.delete(shapes).where(eq(shapes.id, id)).returning({ id: shapes.id });
-    return result.length > 0;
-  }
+  // Shape methods REMOVED
   
   // ProjectAnalysis methods
   async getProjectAnalysis(id: number): Promise<ProjectAnalysis | undefined> {

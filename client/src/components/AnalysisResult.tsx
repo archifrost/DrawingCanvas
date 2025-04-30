@@ -85,13 +85,13 @@ export default function AnalysisResult({ data }: AnalysisResultProps) {
                   {data.parcel_coordinates.map((coord, idx) => (
                     <tr key={idx}>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                        {coord.No !== undefined ? coord.No : idx + 1}
+                        {coord.Nokta !== undefined ? coord.Nokta : idx + 1}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {coord.x.toFixed(2)}
+                        {coord.X.toFixed(2)}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {coord.y.toFixed(2)}
+                        {coord.Y.toFixed(2)}
                       </td>
                     </tr>
                   ))}
